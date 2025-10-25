@@ -1,0 +1,25 @@
+// docker run --rm -it --gpus all -v $PWD:/workspace difix3d-cu118 の構成
+
+{
+  "name": "difix-defence-splat",
+  "build": {
+    "context": "..",
+    "dockerfile": "../Dockerfile"
+  },
+  "runArgs": ["--gpus", "all"],
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+
+  // 拡張機能
+  "customizations": {
+  "vscode": {
+      "settings": {
+      "python.defaultInterpreterPath": "/opt/conda/bin/python" // Python 拡張が最初に選ぶインタープリタを固定
+      },
+      "extensions": [ // コンテナ内に VS Code 拡張を自動インストール
+      "ms-python.python", // （Python コード実行／デバッグ）
+      "ms-python.vscode-pylance" // （型情報＋高速補完）
+      ]
+  }
+  }
+}
