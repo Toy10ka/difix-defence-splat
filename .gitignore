@@ -1,0 +1,16 @@
+# Python キャッシュ
+__pycache__/
+*.pyc
+
+# 出力画像・ログなど
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+
+# その他生成物
+*.log
+*.out
+*.tmp
