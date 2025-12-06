@@ -255,7 +255,7 @@ VSCode 用に `.devcontainer/devcontainer.json` を追加している（ロー�
 
 構成の要点:
 
-```json
+```text
 - build:
   - `context: ".."`
   - `dockerfile: "../Dockerfile"`
