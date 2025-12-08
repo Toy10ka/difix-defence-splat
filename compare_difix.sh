@@ -4,7 +4,7 @@
 # エラーが出たら修了
 set -e
 
-CKPT_DIR="outputs/difix/train_ps/checkpoints"
+CKPT_DIR="outputs/difix/train_reg_ps/checkpoints"
 INPUT_IMAGE="test7979.JPG"      # 処理したい画像
 TIMESTEP=199
 
@@ -14,7 +14,7 @@ IMG_NAME="${IMG_BASE%.*}"                      # "test7979"
 IMG_EXT="${IMG_BASE##*.}"                      # "JPG"
 
 # 結果をまとめるフォルダ
-ROOT_OUT="outputs/difix_199_${IMG_NAME}"
+ROOT_OUT="outputs/difix_reg_199_${IMG_NAME}"
 TMP_OUT="outputs/difix_tmp"
 
 mkdir -p "${ROOT_OUT}"

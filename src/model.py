@@ -13,6 +13,9 @@ p = "src/"
 sys.path.append(p)
 from einops import rearrange, repeat
 
+# 追加
+from src.pipeline_difix import DifixPipeline
+
 
 def make_1step_sched():
     noise_scheduler_1step = DDPMScheduler.from_pretrained("stabilityai/sd-turbo", subfolder="scheduler")
@@ -137,9 +140,54 @@ class Difix(torch.nn.Module):
 
         unet = UNet2DConditionModel.from_pretrained("stabilityai/sd-turbo", subfolder="unet")
 
+
+        # 追加 -------------------------
+
+        # if pretrained_path is not None:
+        #     sd = torch.load(pretrained_path, map_location="cpu")
+        #     vae_lora_config = LoraConfig(r=sd["rank_vae"], init_lora_weights="gaussian", target_modules=sd["vae_lora_target_modules"])
+        #     vae.add_adapter(vae_lora_config, adapter_name="vae_skip")
+        #     _sd_vae = vae.state_dict()
+        #     for k in sd["state_dict_vae"]:
+        #         _sd_vae[k] = sd["state_dict_vae"][k]
+        #     vae.load_state_dict(_sd_vae)
+        #     _sd_unet = unet.state_dict()
+        #     for k in sd["state_dict_unet"]:
+        #         _sd_unet[k] = sd["state_dict_unet"][k]
+        #     unet.load_state_dict(_sd_unet)
+
+        # elif pretrained_name is None and pretrained_path is None:
+        #     print("Initializing model with random weights")
+        #     target_modules_vae = []
+
+        #     torch.nn.init.constant_(vae.decoder.skip_conv_1.weight, 1e-5)
+        #     torch.nn.init.constant_(vae.decoder.skip_conv_2.weight, 1e-5)
+        #     torch.nn.init.constant_(vae.decoder.skip_conv_3.weight, 1e-5)
+        #     torch.nn.init.constant_(vae.decoder.skip_conv_4.weight, 1e-5)
+        #     target_modules_vae = ["conv1", "conv2", "conv_in", "conv_shortcut", "conv", "conv_out",
+        #         "skip_conv_1", "skip_conv_2", "skip_conv_3", "skip_conv_4",
+        #         "to_k", "to_q", "to_v", "to_out.0",
+        #     ]
+            
+        #     target_modules = []
+        #     for id, (name, param) in enumerate(vae.named_modules()):
+        #         if 'decoder' in name and any(name.endswith(x) for x in target_modules_vae):
+        #             target_modules.append(name)
+        #     target_modules_vae = target_modules
+        #     vae.encoder.requires_grad_(False)
+
+        #     vae_lora_config = LoraConfig(r=lora_rank_vae, init_lora_weights="gaussian",
+        #         target_modules=target_modules_vae)
+        #     vae.add_adapter(vae_lora_config, adapter_name="vae_skip")
+                
+        #     self.lora_rank_vae = lora_rank_vae
+        #     self.target_modules_vae = target_modules_vae
+
         if pretrained_path is not None:
+            # 既存の ckpt から LoRA + UNet を復元（PS-only / reg+PS 再開用）
             sd = torch.load(pretrained_path, map_location="cpu")
-            vae_lora_config = LoraConfig(r=sd["rank_vae"], init_lora_weights="gaussian", target_modules=sd["vae_lora_target_modules"])
+            vae_lora_config = LoraConfig(r=sd["rank_vae"], init_lora_weights="gaussian",
+                                         target_modules=sd["vae_lora_target_modules"])
             vae.add_adapter(vae_lora_config, adapter_name="vae_skip")
             _sd_vae = vae.state_dict()
             for k in sd["state_dict_vae"]:
@@ -149,33 +197,87 @@ class Difix(torch.nn.Module):
             for k in sd["state_dict_unet"]:
                 _sd_unet[k] = sd["state_dict_unet"][k]
             unet.load_state_dict(_sd_unet)
+            # self.lora_rank_vae / self.target_modules_vae は ckpt から復元済み
 
-        elif pretrained_name is None and pretrained_path is None:
-            print("Initializing model with random weights")
-            target_modules_vae = []
+        elif pretrained_name is not None and pretrained_path is None:
+            # ← new: 規定 DIFIX から初期化する分岐
+            print(f"Initializing from pretrained DIFIX: {pretrained_name}")
+            pipe = DifixPipeline.from_pretrained(pretrained_name, trust_remote_code=True)  # nvidia/difix
 
+            # （必要なら）テキストエンコーダも上書き
+            self.tokenizer = pipe.tokenizer
+            self.text_encoder = pipe.text_encoder.cuda()
+
+            # UNet の重みを上書き
+            sd_unet = unet.state_dict()
+            sd_unet_pre = pipe.unet.state_dict()
+            for k, v in sd_unet_pre.items():
+                if k in sd_unet:
+                    sd_unet[k] = v
+            unet.load_state_dict(sd_unet)
+
+            # VAE の重みを上書き
+            sd_vae = vae.state_dict()
+            sd_vae_pre = pipe.vae.state_dict()
+            for k, v in sd_vae_pre.items():
+                if k in sd_vae:
+                    sd_vae[k] = v
+            vae.load_state_dict(sd_vae)
+
+            # ここから先は「ランダム初期化」と同じ LoRA セットアップ
+            print("Initializing VAE LoRA on top of pretrained DIFIX weights")
             torch.nn.init.constant_(vae.decoder.skip_conv_1.weight, 1e-5)
             torch.nn.init.constant_(vae.decoder.skip_conv_2.weight, 1e-5)
             torch.nn.init.constant_(vae.decoder.skip_conv_3.weight, 1e-5)
             torch.nn.init.constant_(vae.decoder.skip_conv_4.weight, 1e-5)
+
             target_modules_vae = ["conv1", "conv2", "conv_in", "conv_shortcut", "conv", "conv_out",
-                "skip_conv_1", "skip_conv_2", "skip_conv_3", "skip_conv_4",
-                "to_k", "to_q", "to_v", "to_out.0",
-            ]
-            
+                                  "skip_conv_1", "skip_conv_2", "skip_conv_3", "skip_conv_4",
+                                  "to_k", "to_q", "to_v", "to_out.0"]
+
             target_modules = []
-            for id, (name, param) in enumerate(vae.named_modules()):
+            for name, module in vae.named_modules():
                 if 'decoder' in name and any(name.endswith(x) for x in target_modules_vae):
                     target_modules.append(name)
             target_modules_vae = target_modules
             vae.encoder.requires_grad_(False)
 
             vae_lora_config = LoraConfig(r=lora_rank_vae, init_lora_weights="gaussian",
-                target_modules=target_modules_vae)
+                                         target_modules=target_modules_vae)
             vae.add_adapter(vae_lora_config, adapter_name="vae_skip")
-                
+
             self.lora_rank_vae = lora_rank_vae
             self.target_modules_vae = target_modules_vae
+
+        else:
+            # 既存の「random + LoRA」分岐
+            print("Initializing model with random weights")
+            torch.nn.init.constant_(vae.decoder.skip_conv_1.weight, 1e-5)
+            torch.nn.init.constant_(vae.decoder.skip_conv_2.weight, 1e-5)
+            torch.nn.init.constant_(vae.decoder.skip_conv_3.weight, 1e-5)
+            torch.nn.init.constant_(vae.decoder.skip_conv_4.weight, 1e-5)
+
+            target_modules_vae = ["conv1", "conv2", "conv_in", "conv_shortcut", "conv", "conv_out",
+                                  "skip_conv_1", "skip_conv_2", "skip_conv_3", "skip_conv_4",
+                                  "to_k", "to_q", "to_v", "to_out.0"]
+
+            target_modules = []
+            for name, module in vae.named_modules():
+                if 'decoder' in name and any(name.endswith(x) for x in target_modules_vae):
+                    target_modules.append(name)
+            target_modules_vae = target_modules
+            vae.encoder.requires_grad_(False)
+
+            vae_lora_config = LoraConfig(r=lora_rank_vae, init_lora_weights="gaussian",
+                                         target_modules=target_modules_vae)
+            vae.add_adapter(vae_lora_config, adapter_name="vae_skip")
+
+            self.lora_rank_vae = lora_rank_vae
+            self.target_modules_vae = target_modules_vae
+
+
+        # 追加ここまで----------------------------
+
 
         # unet.enable_xformers_memory_efficient_attention()
         unet.to("cuda")

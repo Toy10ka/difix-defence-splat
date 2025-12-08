@@ -51,6 +51,8 @@ def main(args):
         os.makedirs(os.path.join(args.output_dir, "eval"), exist_ok=True)
 
     net_difix = Difix(
+        # 追加
+        pretrained_name=args.pretrained_model_name_or_path, # 追加FT用
         lora_rank_vae=args.lora_rank_vae, 
         timestep=args.timestep,
         mv_unet=args.mv_unet,
