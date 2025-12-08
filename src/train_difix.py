@@ -97,12 +97,57 @@ def main(args):
         num_warmup_steps=args.lr_warmup_steps * accelerator.num_processes,
         num_training_steps=args.max_train_steps * accelerator.num_processes,
         num_cycles=args.lr_num_cycles, power=args.lr_power,)
+    
+    # === ここから追加: 初期状態の ckpt を保存する ===
+    if accelerator.is_main_process:
+        init_ckpt_dir = os.path.join(args.output_dir, "checkpoints")
+        os.makedirs(init_ckpt_dir, exist_ok=True)
+        init_ckpt_path = os.path.join(init_ckpt_dir, "model_0.pkl")
+        print("=" * 50)
+        print(f"Saving initial (untrained) checkpoint to {init_ckpt_path}")
+        print("=" * 50)
+        save_ckpt(net_difix, optimizer, init_ckpt_path)
+    # === 追加ここまで ===
 
-    dataset_train = PairedDataset(dataset_path=args.dataset_path, split="train", tokenizer=net_difix.tokenizer)
-    dl_train = torch.utils.data.DataLoader(dataset_train, batch_size=args.train_batch_size, shuffle=True, num_workers=args.dataloader_num_workers)
-    dataset_val = PairedDataset(dataset_path=args.dataset_path, split="test", tokenizer=net_difix.tokenizer)
-    random.Random(42).shuffle(dataset_val.img_names)
-    dl_val = torch.utils.data.DataLoader(dataset_val, batch_size=1, shuffle=False, num_workers=0)
+    # 変更 (足りなかったので解像度を落とす)
+
+    # dataset_train = PairedDataset(dataset_path=args.dataset_path, split="train", tokenizer=net_difix.tokenizer)
+    # dl_train = torch.utils.data.DataLoader(dataset_train, batch_size=args.train_batch_size, shuffle=True, num_workers=args.dataloader_num_workers)
+    # dataset_val = PairedDataset(dataset_path=args.dataset_path, split="test", tokenizer=net_difix.tokenizer)
+    # # 変更（img_names → img_ids に差し替え）
+    # random.Random(42).shuffle(dataset_val.img_ids)
+    # dl_val = torch.utils.data.DataLoader(dataset_val, batch_size=1, shuffle=False, num_workers=0)
+    # train 用
+    dataset_train = PairedDataset(
+        dataset_path=args.dataset_path,
+        split="train",
+        height=args.resolution,
+        width=args.resolution,      # 正方形でよければこれでOK
+        tokenizer=net_difix.tokenizer,
+    )
+    dl_train = torch.utils.data.DataLoader(
+        dataset_train,
+        batch_size=args.train_batch_size,
+        shuffle=True,
+        num_workers=args.dataloader_num_workers,
+    )
+
+    # val 用
+    dataset_val = PairedDataset(
+        dataset_path=args.dataset_path,
+        split="test",
+        height=args.resolution,
+        width=args.resolution,
+        tokenizer=net_difix.tokenizer,
+    )
+    random.Random(42).shuffle(dataset_val.img_ids)
+    dl_val = torch.utils.data.DataLoader(
+        dataset_val,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+    )
+
 
     # Resume from checkpoint
     global_step = 0    
@@ -162,18 +207,51 @@ def main(args):
     progress_bar = tqdm(range(0, args.max_train_steps), initial=global_step, desc="Steps",
         disable=not accelerator.is_local_main_process,)
 
+    # ==== DEBUG: トレーニングループに入ったか確認 ====
+    if accelerator.is_main_process:
+        print(f"[DEBUG] start training loop: max_steps={args.max_train_steps}, "
+              f"num_epochs={args.num_training_epochs}", flush=True)
+
     # start the training loop
     for epoch in range(0, args.num_training_epochs):
+        # 二行追加
+        if accelerator.is_main_process:
+            print(f"[DEBUG] epoch {epoch} start", flush=True)
+
         for step, batch in enumerate(dl_train):
+            # 五行追加
+            if accelerator.is_main_process and step == 0:
+                print("[DEBUG] got first batch from dl_train",
+                      "x_src shape =", batch["conditioning_pixel_values"].shape,
+                      "x_tgt shape =", batch["output_pixel_values"].shape,
+                      flush=True)
+
             l_acc = [net_difix]
             with accelerator.accumulate(*l_acc):
+                # 三行追加
+                if accelerator.is_main_process and step < 3:
+                    print(f"[DEBUG] begin step {global_step} (epoch={epoch}, step={step})",
+                          flush=True)
+
+                
                 x_src = batch["conditioning_pixel_values"]
                 x_tgt = batch["output_pixel_values"]
                 B, V, C, H, W = x_src.shape
+                
+                # 三行追加
+                if accelerator.is_main_process and step < 3:
+                    print(f"[DEBUG] x_src shape={x_src.shape}, x_tgt shape={x_tgt.shape}",
+                            flush=True)
 
                 # forward pass
                 x_tgt_pred = net_difix(x_src, prompt_tokens=batch["input_ids"])       
                 
+                # 三行追加
+                if accelerator.is_main_process and step < 3:
+                    print(f"[DEBUG] forward done (global_step={global_step})",
+                          flush=True)
+
+
                 x_tgt = rearrange(x_tgt, 'b v c h w -> (b v) c h w')
                 x_tgt_pred = rearrange(x_tgt_pred, 'b v c h w -> (b v) c h w')
                          
@@ -198,13 +276,33 @@ def main(args):
                     else:
                         loss_gram = torch.tensor(0.0).to(weight_dtype)                    
 
+                # 六行追加
+                if accelerator.is_main_process and step < 3:
+                    print(f"[DEBUG] loss computed: "
+                          f"l2={loss_l2.detach().item():.4f}, "
+                          f"lpips={loss_lpips.detach().item():.4f}, "
+                          f"gram={(loss_gram.detach().item() if args.lambda_gram>0 else 0):.4f}",
+                          flush=True)
+
+
                 accelerator.backward(loss, retain_graph=False)
+
+                # 三行追加
+                if accelerator.is_main_process and step < 3:
+                    print(f"[DEBUG] backward done (global_step={global_step})",
+                          flush=True)
+
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(layers_to_opt, args.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=args.set_grads_to_none)
                 
+                # 三行追加
+                if accelerator.is_main_process and step < 3:
+                    print(f"[DEBUG] optimizer step done (global_step={global_step})",
+                          flush=True)
+
                 x_tgt = rearrange(x_tgt, '(b v) c h w -> b v c h w', v=V)
                 x_tgt_pred = rearrange(x_tgt_pred, '(b v) c h w -> b v c h w', v=V)
 

@@ -27,32 +27,63 @@ class PairedDataset(torch.utils.data.Dataset):
         ref_img = self.data[img_id]["ref_image"] if "ref_image" in self.data[img_id] else None
         caption = self.data[img_id]["prompt"]
         
+        # 変更
         try:
             input_img = Image.open(input_img)
             output_img = Image.open(output_img)
-        except:
+        except Exception:
             print("Error loading image:", input_img, output_img)
-            return self.__getitem__(idx + 1)
+            return self.__getitem__((idx + 1) % len(self))  # 念のため範囲内に
 
-        img_t = F.to_tensor(img_t)
+        # 入力（汚染画像）
+        img_t = F.to_tensor(input_img)
         img_t = F.resize(img_t, self.image_size)
         img_t = F.normalize(img_t, mean=[0.5], std=[0.5])
 
-        output_t = F.to_tensor(output_t)
+        # ターゲット（クリーン画像）
+        output_t = F.to_tensor(output_img)
         output_t = F.resize(output_t, self.image_size)
         output_t = F.normalize(output_t, mean=[0.5], std=[0.5])
 
+        # 参照画像があれば
         if ref_img is not None:
             ref_img = Image.open(ref_img)
-            ref_t = F.to_tensor(ref_t)
+            ref_t = F.to_tensor(ref_img)
             ref_t = F.resize(ref_t, self.image_size)
             ref_t = F.normalize(ref_t, mean=[0.5], std=[0.5])
-        
+
             img_t = torch.stack([img_t, ref_t], dim=0)
-            output_t = torch.stack([output_t, ref_t], dim=0)            
+            output_t = torch.stack([output_t, ref_t], dim=0)
         else:
             img_t = img_t.unsqueeze(0)
             output_t = output_t.unsqueeze(0)
+        
+        # try:
+        #     input_img = Image.open(input_img)
+        #     output_img = Image.open(output_img)
+        # except:
+        #     print("Error loading image:", input_img, output_img)
+        #     return self.__getitem__(idx + 1)
+
+        # img_t = F.to_tensor(img_t)
+        # img_t = F.resize(img_t, self.image_size)
+        # img_t = F.normalize(img_t, mean=[0.5], std=[0.5])
+
+        # output_t = F.to_tensor(output_t)
+        # output_t = F.resize(output_t, self.image_size)
+        # output_t = F.normalize(output_t, mean=[0.5], std=[0.5])
+
+        # if ref_img is not None:
+        #     ref_img = Image.open(ref_img)
+        #     ref_t = F.to_tensor(ref_t)
+        #     ref_t = F.resize(ref_t, self.image_size)
+        #     ref_t = F.normalize(ref_t, mean=[0.5], std=[0.5])
+        
+        #     img_t = torch.stack([img_t, ref_t], dim=0)
+        #     output_t = torch.stack([output_t, ref_t], dim=0)            
+        # else:
+        #     img_t = img_t.unsqueeze(0)
+        #     output_t = output_t.unsqueeze(0)
 
         out = {
             "output_pixel_values": output_t,
