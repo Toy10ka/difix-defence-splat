@@ -13,11 +13,11 @@
 
 ## 0. やりたいこと
 
-
 - 公式 Difix リポジトリをベースに、2D Difix（SD-Turbo ベースの single-step diffusion）と gsplat backend を用いて Difix3D / Difix3D+ を動かす。  
 - Quickstart の DIFIX（`nvidia/difix`, `nvidia/difix_ref`）は論文の 4 条件で事前学習済みモデル。  
-- そのうえで PoisonSplat 汚染画像＋元画像を使って DIFIX を再FTし、PoisonSplat 専用 DIFIX（PS-DIFIX）を作る。  
-- 将来的には「規定 DIFIX（4条件）＋PS」を学習した DIFIX（reg→PS 再FT）も試す予定。
+- PoisonSplat 汚染画像＋元画像を使って DIFIX を再FTし、PoisonSplat 専用 DIFIX（PS-DIFIX）を作る。  
+- さらに、論文条件で学習済みの DIFIX（Reg-DIFIX）に対しても PS で再FTし、Hybrid-DIFIX を作る。  
+- 今後はノイズレベル τ の最適化や UNet の freeze なども含めて、PS-DIFIX / Hybrid-DIFIX の挙動を整理し、Difix3D 側での有効性を評価する。
 
 ---
 
@@ -252,7 +252,7 @@ VSCode 用に `.devcontainer/devcontainer.json` を追加している（ロー�
 
 構成の要点:
 
-```json
+```text
 - build:
   - `context: ".."`
   - `dockerfile: "../Dockerfile"`
@@ -605,16 +605,108 @@ EOF
 
 ---
 
-## 10. 現時点の観察と今後
 
-- PS-DIFIX は脚や床の PoisonSplat 縦スジノイズを強く抑える。  
-- 規定 DIFIX は構造保持が上手で、特に天板や背景の立体感が残りやすい。  
-- 1000〜3000 step で大きく改善し、4000〜8000 step はほぼ plateau。10k step はオーバーキル気味だが悪化はしない。  
+## 10. Hybrid-DIFIX（Reg-DIFIX 初期化 + PS-FT）
 
-今後やりたいこと（メモ）:
+### 10.1 方針
 
-- timestep を変えた PS-DIFIX（例: τ=100, 200, 400）を複数作り、PoisonSplat に対する構造 vs 毒除去のバランスを調べる。  
-- 規定 DIFIX (`nvidia/difix`) を初期値として PS データで追加学習するパスを `train_difix.py` に作る（4条件＋PS の良いとこ取り）。  
-- Difix3D / Difix3D+ パイプラインに PS-DIFIX / reg-DIFIX / reg→PS-DIFIX を組み込み、3D レンダで比較する。  
-- ROI ベース混在は MVC（multi-view consistency）の観点と PoisonSplat の攻撃モデルの観点から本命にはしない（全画素処理のモデル同士で比較する）。
+- Reg-DIFIX (`nvidia/difix`) は、論文条件で FT 済みの SD-Turbo。  
+- Hybrid-DIFIX は、Reg-DIFIX を初期値にして PS データで追加学習した DIFIX。  
+- 実装としては、`model.Difix` の内部で
+  - `DifixPipeline.from_pretrained("nvidia/difix", trust_remote_code=True)` を呼び出し
+  - そこから UNet / VAE / tokenizer / text_encoder の重みをコピーする
+  という分岐を追加し、`train_difix.py` から `pretrained_model_name_or_path` を渡すようにする。
+
+### 10.2 `model.Difix` 側の変更
+
+`Difix.__init__` に `pretrained_name` 引数を追加し、`pretrained_path` による復元とは別の分岐を用意した。
+
+追加した分岐のイメージ（抜粋のみ）:
+
+```python
+from src.pipeline_difix import DifixPipeline
+
+class Difix(torch.nn.Module):
+    def __init__(self, pretrained_name=None, pretrained_path=None, ..., lora_rank_vae=4, mv_unet=False, timestep=999):
+        ...
+        vae = AutoencoderKL.from_pretrained("stabilityai/sd-turbo", subfolder="vae")
+        ...
+        unet = UNet2DConditionModel.from_pretrained("stabilityai/sd-turbo", subfolder="unet")
+
+        if pretrained_path is not None:
+            # 既存 ckpt からの復元（PS-only / 再開用）
+            ...
+
+        elif pretrained_name is not None and pretrained_path is None:
+            print(f"Initializing from pretrained DIFIX: {pretrained_name}")
+            pipe = DifixPipeline.from_pretrained(pretrained_name, trust_remote_code=True)
+
+            # tokenizer / text_encoder を上書き
+            self.tokenizer = pipe.tokenizer
+            self.text_encoder = pipe.text_encoder.cuda()
+
+            # UNet 重みを上書き
+            sd_unet = unet.state_dict()
+            sd_unet_pre = pipe.unet.state_dict()
+            for k, v in sd_unet_pre.items():
+                if k in sd_unet:
+                    sd_unet[k] = v
+            unet.load_state_dict(sd_unet)
+
+            # VAE 重みを上書き
+            sd_vae = vae.state_dict()
+            sd_vae_pre = pipe.vae.state_dict()
+            for k, v in sd_vae_pre.items():
+                if k in sd_vae:
+                    sd_vae[k] = v
+            vae.load_state_dict(sd_vae)
+
+            # Reg-DIFIX 上に LoRA を載せる
+            print("Initializing VAE LoRA on top of pretrained DIFIX weights")
+            ...
+```
+
+### 10.3 `train_difix.py` 側の変更
+
+`Difix` 初期化時に CLI の `--pretrained_model_name_or_path` を渡すように修正。
+
+```python
+net_difix = Difix(
+    pretrained_name=args.pretrained_model_name_or_path,
+    lora_rank_vae=args.lora_rank_vae,
+    timestep=args.timestep,
+    mv_unet=args.mv_unet,
+)
+```
+
+`--resume` は既存の ckpt から再開する場合に使う（PS-only の再開と同じ扱い）。
+
+### 10.4 Hybrid-DIFIX の学習コマンド
+
+Reg-DIFIX (`nvidia/difix`) を初期値として PoisonSplat データで追いFTするコマンド:
+
+```bash
+export WANDB_DISABLED=true  # wandb はオフのままでOK
+
+accelerate launch --mixed_precision=bf16 src/train_difix.py     --output_dir ./outputs/difix/train_reg_ps     --dataset_path data/data_poison_splat.json     --max_train_steps 5000     --resolution 512     --learning_rate 1e-5     --train_batch_size 1     --dataloader_num_workers 0     --checkpointing_steps 1000     --eval_freq 1000     --viz_freq 100     --lambda_lpips 1.0     --lambda_l2 1.0     --lambda_gram 1.0     --gram_loss_warmup_steps 2000     --report_to "wandb"     --tracker_project_name "difix_reg_ps"     --tracker_run_name "train_reg_ps"     --timestep 199     --pretrained_model_name_or_path "nvidia/difix"
+```
+
+- `output_dir` は PS-DIFIX の `train_ps` とは別（`train_reg_ps`）。  
+- `max_train_steps=5000` としているが、現状は `num_training_epochs` と組み合わせて長めに回し、好きなところで Ctrl+C で止めている。  
+- 他の設定は PS-DIFIX 学習とほぼ同じ。
+
+---
+
+## 11. 今後やりたいことメモ
+
+- UNet 側は freeze して VAE LoRA だけ PoisonSplat で再FTする設定を試す。  
+  → Reg-DIFIX の構造復元能力をほぼそのまま残しつつ、VAE 段でノイズだけ削れるかもしれない。  
+- **ノイズレベル τ を振る（Reg+PS の τ=100 / 199 / 400 版など）**。  
+  → τ によって「構造 vs ノイズ除去」のバランスが変わる可能性がある。  
+- 学習率を小さくして、PS データでの更新量を制限する。  
+  → Reg-DIFIX の weight からあまり動かさないようにする。  
+- PS FT step を短めにする実験。  
+  → 1000 step の時点でかなり上書き感があったので、100〜1000 step くらいでの挙動を見たい。  
+- eval 出力をファイルとして保存するコードを追加し、`val/lpips` / `val/l2` のログを ckpt 番号ごとに残しておく（今は wandb のみ）。
+
 
