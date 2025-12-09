@@ -30,6 +30,9 @@ RUN awk '!/^(torch|torchvision|torchaudio)(\[|==|>=|<=|~=|>|<| |$)/' \
  # ソース一式をコピー（examples/gsplat/requirements.txt が使えるようになる）
  COPY . /workspace
 
+ # CUDAアーキ指定
+ ENV TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0+PTX"
+
  # gsplat環境を構築
  RUN pip install gsplat \
  && pip install --force-reinstall \
