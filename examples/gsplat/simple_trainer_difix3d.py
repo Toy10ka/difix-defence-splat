@@ -51,6 +51,8 @@ from src.pipeline_difix import DifixPipeline
 
 @dataclass
 class Config:
+    # 追加：Disable DIFIX fixer (gsplat only baseline)
+    disable_fix: bool = False
     # Disable viewer
     disable_viewer: bool = True # ! turn off viser
     # Path to the .pt files. If provide, it will skip training and run evaluation only.
@@ -837,10 +839,16 @@ class Runner:
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
 
+            # 追加-----------------------
             # run fixer
-            if step in [i - 1 for i in cfg.fix_steps]:
-                self.fix(step)
+            # if step in [i - 1 for i in cfg.fix_steps]:
+            #     self.fix(step)
             
+            # run fixer (if enabled)
+            if (not cfg.disable_fix) and step in [i - 1 for i in cfg.fix_steps]:
+                self.fix(step)
+            # 追加ここまで----------------
+
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
                 self.run_compression(step=step)

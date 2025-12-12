@@ -111,45 +111,50 @@ def main(args):
         save_ckpt(net_difix, optimizer, init_ckpt_path)
     # === 追加ここまで ===
 
-    # 変更 (足りなかったので解像度を落とす)
+    # === ここから追加 ===
 
-    # dataset_train = PairedDataset(dataset_path=args.dataset_path, split="train", tokenizer=net_difix.tokenizer)
-    # dl_train = torch.utils.data.DataLoader(dataset_train, batch_size=args.train_batch_size, shuffle=True, num_workers=args.dataloader_num_workers)
-    # dataset_val = PairedDataset(dataset_path=args.dataset_path, split="test", tokenizer=net_difix.tokenizer)
-    # # 変更（img_names → img_ids に差し替え）
-    # random.Random(42).shuffle(dataset_val.img_ids)
-    # dl_val = torch.utils.data.DataLoader(dataset_val, batch_size=1, shuffle=False, num_workers=0)
-    # train 用
-    dataset_train = PairedDataset(
-        dataset_path=args.dataset_path,
-        split="train",
-        height=args.resolution,
-        width=args.resolution,      # 正方形でよければこれでOK
-        tokenizer=net_difix.tokenizer,
-    )
-    dl_train = torch.utils.data.DataLoader(
-        dataset_train,
-        batch_size=args.train_batch_size,
-        shuffle=True,
-        num_workers=args.dataloader_num_workers,
-    )
-
-    # val 用
-    dataset_val = PairedDataset(
-        dataset_path=args.dataset_path,
-        split="test",
-        height=args.resolution,
-        width=args.resolution,
-        tokenizer=net_difix.tokenizer,
-    )
+    # A100レベルならこっち (cf. 32067MiB / 81920MiB )
+    dataset_train = PairedDataset(dataset_path=args.dataset_path, split="train", tokenizer=net_difix.tokenizer)
+    dl_train = torch.utils.data.DataLoader(dataset_train, batch_size=args.train_batch_size, shuffle=True, num_workers=args.dataloader_num_workers)
+    dataset_val = PairedDataset(dataset_path=args.dataset_path, split="test", tokenizer=net_difix.tokenizer)
+    # 変更（img_names → img_ids に差し替え）
     random.Random(42).shuffle(dataset_val.img_ids)
-    dl_val = torch.utils.data.DataLoader(
-        dataset_val,
-        batch_size=1,
-        shuffle=False,
-        num_workers=0,
-    )
+    dl_val = torch.utils.data.DataLoader(dataset_val, batch_size=1, shuffle=False, num_workers=0)
+    
 
+    # 4090ならこっち(VRAM21GBくらい)
+    # # train 用
+    # dataset_train = PairedDataset(
+    #     dataset_path=args.dataset_path,
+    #     split="train",
+    #     height=args.resolution,
+    #     width=args.resolution,      # 正方形でよければこれでOK
+    #     tokenizer=net_difix.tokenizer,
+    # )
+    # dl_train = torch.utils.data.DataLoader(
+    #     dataset_train,
+    #     batch_size=args.train_batch_size,
+    #     shuffle=True,
+    #     num_workers=args.dataloader_num_workers,
+    # )
+
+    # # val 用
+    # dataset_val = PairedDataset(
+    #     dataset_path=args.dataset_path,
+    #     split="test",
+    #     height=args.resolution,
+    #     width=args.resolution,
+    #     tokenizer=net_difix.tokenizer,
+    # )
+    #　random.Random(42).shuffle(dataset_val.img_ids)
+    # dl_val = torch.utils.data.DataLoader(
+    #     dataset_val,
+    #     batch_size=1,
+    #     shuffle=False,
+    #     num_workers=0,
+    # )
+
+    # 追加ここまで ----------
 
     # Resume from checkpoint
     global_step = 0    

@@ -6,7 +6,10 @@
     "context": "..",
     "dockerfile": "../Dockerfile"
   },
-  "runArgs": ["--gpus", "all"],
+  "runArgs": [
+  "--gpus", "all",
+  "--shm-size=16g"
+],
   "workspaceFolder": "/workspace",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
 

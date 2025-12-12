@@ -177,10 +177,31 @@ class Parser:
                 image_names = colmap_files
             image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
         else:
+            # colmap_files = sorted(_get_rel_paths(colmap_image_dir))
+            # image_files = sorted(_get_rel_paths(image_dir))
+            # colmap_to_image = dict(zip(colmap_files, image_files))
+            # image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
+
+            # 追加: ファイル名マッチングで対応付け
             colmap_files = sorted(_get_rel_paths(colmap_image_dir))
             image_files = sorted(_get_rel_paths(image_dir))
-            colmap_to_image = dict(zip(colmap_files, image_files))
-            image_paths = [os.path.join(image_dir, colmap_to_image[f]) for f in image_names]
+
+            # images_4 側のファイル名 -> 相対パス の辞書
+            image_map = {os.path.basename(f): f for f in image_files}
+
+            image_paths = []
+            for name in image_names:
+                if name not in image_map:
+                    # もし一致するファイルが無い場合は警告だけ出してスキップ
+                    print(f"Warning: image_path not found for reconstruction: {name}")
+                    continue
+                image_paths.append(os.path.join(image_dir, image_map[name]))
+            # 追加ここまで -------------------------------------------------
+
+
+
+
+
 
         # 3D points and {image_name -> [point_idx]}
         points = manager.points3D.astype(np.float32)

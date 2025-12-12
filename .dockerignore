@@ -1,0 +1,27 @@
+# build context から data/ や output/ を外す
+
+# データ・出力
+data/
+outputs/
+
+# モデル・重いバイナリ
+*.pt
+*.pth
+*.pkl
+*.npz
+*.npy
+
+# Python キャッシュなど
+__pycache__/
+*.pyc
+
+# ビルド生成物
+build/
+dist/
+
+# バージョン管理
+.git
+.gitignore
+
+# devcontainer 関連（ビルドコンテキストに要らないものがあれば）
+.devcontainer
